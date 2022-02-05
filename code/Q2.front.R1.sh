@@ -2,22 +2,27 @@
 #--------------------------------------------------------------------------------
 #  SBATCH CONFIG
 #--------------------------------------------------------------------------------
-#SBATCH --job-name=$PWD       # name for the job
+#SBATCH --job-name=$1       # name for the job
 #SBATCH --cpus-per-task=5              # number of cores
-#SBATCH --mem=150G                       # total memory
+#SBATCH --mem=100G                       # total memory
 #SBATCH --nodes 1
-#SBATCH --time 04:00:00                 # time limit in the form days-hours:minutes
+#SBATCH --time 08:00:00                 # time limit in the form days-hours:minutes
 #SBATCH --mail-user=zlmg2b@umsystem.edu    # email address for notifications
 #SBATCH --mail-type=FAIL,END,BEGIN           # email types
 #SBATCH --partition Lewis            # max of 1 node and 4 hours; use `Lewis` for larger jobs
 #--------------------------------------------------------------------------------
+
+
+## Change discard untrimmed cutadapt
+## Change DADA2 trunc back to 150
+## Header
 
 echo "### Starting at: $(date) ###"
 
 module load miniconda3
 source activate qiime2-2021.8
 
-mkdir sequences
+mkdir R1_sequences
 mkdir $4
 cd $4
 mkdir Dada2
@@ -30,12 +35,12 @@ mkdir transfer/Dada2
 mkdir transfer/taxonomy
 cd ..
 
-python3 ../workflow/generate_manifest.py -i $1 -l $2 -m $3
+python3 ../workflow/generate_manifest_R1.py -i $1 -l $2 -m $3
 
 cd demux_seqs
 
 for file in *R1*.gz; do [ -f "$file" ] || continue; mv -vf "$file" "${file//_*R1_001.fastq.gz/_R1.fastq.gz}"; done
-for file in *R2*.gz; do [ -f "$file" ] || continue; mv -vf "$file" "${file//_*R2_001.fastq.gz/_R2.fastq.gz}"; done
+# for file in *R2*.gz; do [ -f "$file" ] || continue; mv -vf "$file" "${file//_*R2_001.fastq.gz/_R2.fastq.gz}"; done
 
 cd ..
 
@@ -45,26 +50,26 @@ cp ./metadata.txt ./$4/metadata.txt
 ## manifest generated in generate_manifest.py
 
 qiime tools import \
-  --type "SampleData[PairedEndSequencesWithQuality]" \
-  --input-format PairedEndFastqManifestPhred33 \
+  --type "SampleData[SequencesWithQuality]" \
+  --input-format SingleEndFastqManifestPhred33 \
   --input-path ./manifest.csv \
-  --output-path ./sequences/demux_seqs.qza
+  --output-path ./R1_sequences/demux_seqs.qza
 
 mv ./manifest.csv ./$4/manifest.csv
 
 ## Visualize imported seqs
 qiime demux summarize \
-  --i-data ./sequences/demux_seqs.qza \
-  --o-visualization ./sequences/demux_seqs.qzv
+  --i-data ./R1_sequences/demux_seqs.qza \
+  --o-visualization ./R1_sequences/demux_seqs.qzv
 
 qiime tools export \
-  --input-path ./sequences/demux_seqs.qzv \
-  --output-path ./sequences/
+  --input-path ./R1_sequences/demux_seqs.qzv \
+  --output-path ./R1_sequences/
 
-mv ./sequences/per-sample-fastq-counts.tsv \
-   ./sequences/per-sample-fastq-counts_untrimmed.tsv
+mv ./R1_sequences/per-sample-fastq-counts.tsv \
+   ./R1_sequences/per-sample-fastq-counts_untrimmed.tsv
 
-cd ./sequences/
+cd ./R1_sequences/
 rm -rf data.jsonp
 rm -rf demultiplex-summary*
 rm -rf dist
@@ -74,30 +79,28 @@ rm -rf *seven-number-summaries.tsv
 cd ..
 
 ## Trim Ilumina primers/adapters from demux seqs
-qiime cutadapt trim-paired \
-  --i-demultiplexed-sequences ./sequences/demux_seqs.qza \
+qiime cutadapt trim-single \
+  --i-demultiplexed-sequences ./R1_sequences/demux_seqs.qza \
   --p-cores $SLURM_CPUS_ON_NODE \
-  --p-adapter-f 'ATTAGAWACCCBDGTAGTCC' \
-  --p-front-f 'GTGCCAGCMGCCGCGGTAA' \
-  --p-adapter-r 'TTACCGCGGCKGCTGGCAC' \
-  --p-front-r 'GGACTACHVGGGTWTCTAAT' \
-  --p-discard-untrimmed \
+  --p-adapter 'ATTAGAWACCCBDGTAGTCC' \
+  --p-front 'GTGCCAGCMGCCGCGGTAA' \
+  --p-no-discard-untrimmed \
   --p-no-indels \
-  --o-trimmed-sequences ./sequences/trimmed_demux_seqs.qza 
+  --o-trimmed-sequences ./R1_sequences/trimmed_demux_seqs.qza 
 
 ## Visualize trimmed seqs
 qiime demux summarize \
-  --i-data ./sequences/trimmed_demux_seqs.qza \
-  --o-visualization ./sequences/trimmed_demux_seqs.qzv
+  --i-data ./R1_sequences/trimmed_demux_seqs.qza \
+  --o-visualization ./R1_sequences/trimmed_demux_seqs.qzv
 
 qiime tools export \
-  --input-path ./sequences/trimmed_demux_seqs.qzv \
-  --output-path ./sequences/
+  --input-path ./R1_sequences/trimmed_demux_seqs.qzv \
+  --output-path ./R1_sequences/
 
-mv ./sequences/per-sample-fastq-counts.tsv \
-   ./sequences/per-sample-fastq-counts_trimmed.tsv
+mv ./R1_sequences/per-sample-fastq-counts.tsv \
+   ./R1_sequences/per-sample-fastq-counts_trimmed.tsv
 
-cd ./sequences/
+cd ./R1_sequences/
 rm -rf data.jsonp
 rm -rf demultiplex-summary*
 rm -rf dist
@@ -110,10 +113,9 @@ cd $4
 
 ## Denoise seqs to unique Amplicon Sequence Variants (ASVs)
 ## Parameters are historical values from IRCF pipeline
-qiime dada2 denoise-paired \
-  --i-demultiplexed-seqs ../sequences/trimmed_demux_seqs.qza \
-  --p-trunc-len-f 150 \
-  --p-trunc-len-r 150 \
+qiime dada2 denoise-single \
+  --i-demultiplexed-seqs ../R1_sequences/trimmed_demux_seqs.qza \
+  --p-trunc-len 225 \
   --o-table ./Dada2/dada2_table.qza \
   --o-representative-sequences ./Dada2/dada2_rep_seqs.qza \
   --o-denoising-stats ./Dada2/dada2_stats.qza \
@@ -128,7 +130,7 @@ qiime metadata tabulate \
 qiime feature-table filter-seqs \
   --i-data ./Dada2/dada2_rep_seqs.qza \
   --m-metadata-file ./Dada2/dada2_rep_seqs.qza \
-  --p-where 'length(sequence) >= 249 AND length(sequence) <= 257' \
+  --p-where 'length(sequence) >= 220 AND length(sequence) <= 230' \
   --o-filtered-data ./Dada2/dada2_rep_seqs_filtered.qza 
 
 ## Filter feature table based on retained seqs
